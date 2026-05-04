@@ -281,7 +281,7 @@ def run_ge(pmo,weights,parser_state,debug = None):
         # IADDR - Index Address (BASE)
         elif command_type == 0x02:
             info(code)
-            ps.index_address = base + command & 0xFFFFFF
+            ps.index_address = base + (command & 0xFFFFFF)
         # PRIM - Primitive Kick  index_counts.append((bitarray(command,primitiveTypeMap),ps.copy()))
         elif command_type == 0x04:
             info("PRIM")

@@ -74,6 +74,7 @@ def materialSetup(matName,texture):
     mat = bpy.data.materials.new(name=matName)
     #blenderObj.data.materials.append(mat)
     mat.use_nodes=True
+    mat.blend_method = 'CLIP'
 
     nodes = mat.node_tree.nodes
     nodes.clear()
@@ -221,7 +222,7 @@ class ImportPMO(Operator, ImportHelper):
         wts = []
         uvScale = uvModifier[0]
         uvOffset = uvModifier[1]
-        vs = [1 - vtx.uv.v * uvScale[1] for vtx in mesh if vtx.uv]
+        vs = [vtx.uv.v * uvScale[1] for vtx in mesh if vtx.uv]
         min_vs = min(vs)
         print(min_vs)
         for v in mesh:
@@ -237,7 +238,7 @@ class ImportPMO(Operator, ImportHelper):
                 # else:
                 #     uv.append((v.uv.u*uvScale[0],v.uv.v*uvScale[1]))
                 
-                uv_v = 1 - v.uv.v * uvScale[1] - min_vs
+                uv_v = v.uv.v * uvScale[1] - min_vs
                 print(uv_v)
                 uv.append((
                     v.uv.u * uvScale[0],
