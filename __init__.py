@@ -46,18 +46,46 @@ def class_defs():
         pass
 
 def register():
-    class_defs()
+    print("REGISTERING ADDON")
+
+    # Force clean state
     for cl in classes:
+        try:
+            bpy.utils.unregister_class(cl)
+        except:
+            pass
+
+    for cl in classes:
+        print("Register:", cl)
         bpy.utils.register_class(cl)
+
+    try:
+        bpy.types.TOPBAR_MT_file_import.remove(pmo_model_menu_func_import)
+    except:
+        pass
+
+    try:
+        bpy.types.TOPBAR_MT_file_import.remove(ahi_skeleton_menu_func_import)
+    except:
+        pass
+
     bpy.types.TOPBAR_MT_file_import.append(pmo_model_menu_func_import)
     bpy.types.TOPBAR_MT_file_import.append(ahi_skeleton_menu_func_import)
 
+    print("REGISTER OK")
+
 def unregister():
-    for cl in classes:
-        bpy.utils.register_class(cl)
-    bpy.types.TOPBAR_MT_file_import.remove(pmo_model_menu_func_import)
-    bpy.types.TOPBAR_MT_file_import.append(ahi_skeleton_menu_func_import)
-    
+    for cl in reversed(classes):
+        try:
+            bpy.utils.unregister_class(cl)
+        except:
+            pass
+
+    try:
+        bpy.types.TOPBAR_MT_file_import.remove(pmo_model_menu_func_import)
+        bpy.types.TOPBAR_MT_file_import.remove(ahi_skeleton_menu_func_import)
+    except:
+        pass
 
 if __name__ == "__main__":
     try:

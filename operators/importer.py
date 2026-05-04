@@ -74,25 +74,26 @@ def materialSetup(matName,texture):
     mat = bpy.data.materials.new(name=matName)
     #blenderObj.data.materials.append(mat)
     mat.use_nodes=True
+
     nodes = mat.node_tree.nodes
-    for node in nodes:
-        nodes.remove(node)
+    nodes.clear()
 
     nodeTree = mat.node_tree
 
     bsdfNode = nodeTree.nodes.new(type="ShaderNodeBsdfPrincipled")
+    bsdfNode.inputs["Roughness"].default_value = 1.0
     setLocation(bsdfNode,(6,0))
     bsdfNode.name = "Principled BSDF"
     endNode = bsdfNode
 
-    diffuseNode = createTexNode(nodeTree,"COLOR",texture,"Diffuse Texture")
+    diffuseNode = createTexNode(nodeTree, "sRGB", texture, "Diffuse Texture")
     setLocation(diffuseNode,(0,0))
 
-    nodeTree.links.new(diffuseNode.outputs[0],bsdfNode.inputs[0])
-    nodeTree.links.new(diffuseNode.outputs[1],bsdfNode.inputs[4])
+    nodeTree.links.new(diffuseNode.outputs["Color"], bsdfNode.inputs["Base Color"])
+    nodeTree.links.new(diffuseNode.outputs["Alpha"], bsdfNode.inputs["Alpha"])
 
     outputNode = nodeTree.nodes.new(type="ShaderNodeOutputMaterial")
-    nodeTree.links.new(endNode.outputs[0],outputNode.inputs[0])
+    nodeTree.links.new(bsdfNode.outputs["BSDF"], outputNode.inputs["Surface"])
 
     return mat
 
@@ -164,16 +165,16 @@ class ImportPMO(Operator, ImportHelper):
     def findTexture(self,tindex):
         #print(tindex)
         #print("Starting Texture Load")
+        pattern = f"material{tindex:02d}.png"
         if str(self.texturePath) != "":
             #print(self.texturePath)
-            for p in Path(self.texturePath).glob("*%03d*.png"%tindex):
+            for p in Path(self.texturePath).glob(pattern):
                 tex = self.fetchTexture(str(p))
                 if tex is not None:
                     return tex
         else:
-            #print("Texture",self.properties.filepath,tindex)
-            for p in Path(self.properties.filepath).parent.rglob("*%03d*.png"%tindex):
-                #print("Path",p)
+            #print(self.properties.filepath)
+            for p in Path(self.properties.filepath).parent.rglob(pattern):
                 tex = self.fetchTexture(str(p))
                 if tex is not None:
                     return tex
@@ -187,6 +188,7 @@ class ImportPMO(Operator, ImportHelper):
             if mat.index in mapping:
                 continue
             tindex = textureIDs[mat.textureID] if mat.textureID in textureIDs else len(textureIDs)
+            print(f"Texture Index: {tindex}")
             textureIDs[mat.textureID] = tindex
             if tindex in texturemap:
                 texture = texturemap[tindex]
@@ -196,8 +198,13 @@ class ImportPMO(Operator, ImportHelper):
                 else:
                     texture = None
                 texturemap[tindex] = texture
-            matname = "PMO_Material_%03d"%(mat.index)
-            material = materialSetup(matname,texture)
+            # matname = "PMO_Material_%03d"%(mat.index)
+            # material = materialSetup(matname,texture)
+            base_name = f"material_{mat.textureID:02d}"
+            material = bpy.data.materials.get(base_name)
+            if material is None:
+                material = materialSetup(base_name, texture)
+
             for f,fn in zip(["rgba","shadow_rgba","textureID"],
                         ["diffuse","ambient","texture_index"]):
                 material["pmo_"+fn] = mat[f]
@@ -214,18 +221,28 @@ class ImportPMO(Operator, ImportHelper):
         wts = []
         uvScale = uvModifier[0]
         uvOffset = uvModifier[1]
+        vs = [1 - vtx.uv.v * uvScale[1] for vtx in mesh if vtx.uv]
+        min_vs = min(vs)
+        print(min_vs)
         for v in mesh:
             if v.position:
-                verts.append((v.position.x*scale[0],v.position.y*scale[1],v.position.z*scale[2]))
+                # verts.append((v.position.x*scale[0],v.position.y*scale[1],v.position.z*scale[2]))
+                verts.append((-v.position.x*scale[0],v.position.z*scale[2],v.position.y*scale[1]))
             if v.normal:
-                nors.append((v.normal.x,v.normal.y,v.normal.z))
+                # nors.append((v.normal.x,v.normal.y,v.normal.z))
+                nors.append((-v.normal.x, v.normal.z, v.normal.y))
             if v.uv:
-                if self.flipUV:
-                    uv.append( (v.uv.u*uvScale[0] + uvOffset[0],
-                               (v.uv.v*uvScale[1]  + uvOffset[1])))
-                else:
-                    uv.append((v.uv.u*uvScale[0] + uvOffset[0],
-                               1 - (v.uv.v*uvScale[1] + uvOffset[1])))
+                # if self.flipUV:
+                #     uv.append((v.uv.u*uvScale[0],1 - v.uv.v*uvScale[1]))
+                # else:
+                #     uv.append((v.uv.u*uvScale[0],v.uv.v*uvScale[1]))
+                
+                uv_v = 1 - v.uv.v * uvScale[1] - min_vs
+                print(uv_v)
+                uv.append((
+                    v.uv.u * uvScale[0],
+                    uv_v
+                ))
             if v.colour:
                 col.append((v.colour.r,v.colour.g,v.colour.b,v.colour.a))
             if any(map(lambda x: x is not None, v.weight)):
@@ -239,16 +256,34 @@ class ImportPMO(Operator, ImportHelper):
         #print("Face Parsed")
         #return [f for f,m in faces],[m for f,m in faces]
 
-    def setMaterials(self,mesh,faceMats,masterMats):
-        for material in masterMats:
-            mesh.materials.append(masterMats[material])
+    def setMaterials(self, mesh, faceMats, masterMats):
+        # Step 1: map global index → actual material object
+        face_material_objs = [masterMats[m] for m in faceMats]
 
+        # Step 2: build unique material list (by object identity)
+        unique_materials = []
+        mat_to_index = {}
+
+        for mat in face_material_objs:
+            if mat not in mat_to_index:
+                mat_to_index[mat] = len(unique_materials)
+                unique_materials.append(mat)
+
+        # Step 3: clear and assign unique materials
+        mesh.materials.clear()
+        for mat in unique_materials:
+            mesh.materials.append(mat)
+
+        # Step 4: assign indices per face
         blenderBMesh = bmesh.new()
         blenderBMesh.from_mesh(mesh)
         blenderBMesh.faces.ensure_lookup_table()
-        for face,mat in zip(blenderBMesh.faces,faceMats):
-            face.material_index = mat
+
+        for face, mat_obj in zip(blenderBMesh.faces, face_material_objs):
+            face.material_index = mat_to_index[mat_obj]
+
         blenderBMesh.to_mesh(mesh)
+        blenderBMesh.free()
         mesh.update()
 
     def decomposeMetaLayers(self,metalayers):
@@ -337,19 +372,26 @@ class ImportPMO(Operator, ImportHelper):
             col.color = color[l.vertex_index]
 
    #UVs
-    def setUVs(self, blenderMesh, uv):#texFaces):
+    def setUVs(self, blenderMesh, uv):
         name = "UV_Layer"
-        texture = blenderMesh.uv_layers.new(name=name)
-        name = texture.name
+
+        # Create UV layer (new API)
+        uv_layer = blenderMesh.uv_layers.new(name=name)
+
         blenderMesh.update()
+
         blenderBMesh = bmesh.new()
         blenderBMesh.from_mesh(blenderMesh)
-        uv_layer = blenderBMesh.loops.layers.uv[name]
+
+        # Access UV layer in bmesh
+        uv_layer_bm = blenderBMesh.loops.layers.uv[uv_layer.name]
+
         blenderBMesh.faces.ensure_lookup_table()
+
         for face in blenderBMesh.faces:
             for loop in face.loops:
-                #BlenderImporterAPI.dbg.write("\t%d\n"%loop.vert.index)
-                loop[uv_layer].uv = uv[loop.vert.index]
+                loop[uv_layer_bm].uv = uv[loop.vert.index]
+
         blenderBMesh.to_mesh(blenderMesh)
         blenderMesh.update()
         return
@@ -364,11 +406,13 @@ class ImportPMO(Operator, ImportHelper):
                     blenderObj.vertex_groups[groupName].add([ix],wt,'ADD')
 
     def setClip(self,clippingDistance):
-        for a in bpy.context.screen.areas:
-            if a.type == 'VIEW_3D':
-                for s in a.spaces:
-                    if s.type == 'VIEW_3D':
-                        s.clip_end = clippingDistance*10
+        for screen in bpy.data.screens:
+            for area in screen.areas:
+                if area.type == 'VIEW_3D':
+                    for space in area.spaces:
+                        if space.type == 'VIEW_3D':
+                            space.clip_start = 0.5
+                            space.clip_end = clippingDistance * 10
     
 class ImportCMO(ImportPMO, Operator, ImportHelper):
     bl_idname = "custom_import.import_mhfu_cmo"
